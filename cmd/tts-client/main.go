@@ -187,6 +187,7 @@ func startDaemon(options daemonOptions) error {
 	cmd.Stdin = nil
 	cmd.Stdout = log
 	cmd.Stderr = log
+	detachCommand(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
