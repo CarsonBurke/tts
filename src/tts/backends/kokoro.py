@@ -13,7 +13,7 @@ from ..audio import SpeechError, play_wav
 
 DEFAULT_MODEL = "hexgrad/Kokoro-82M"
 DEFAULT_LANGUAGE = "a"
-DEFAULT_VOICE = "af_heart"
+DEFAULT_VOICE = "af_samantha"
 DEFAULT_SAMPLE_RATE = 24000
 _PIPELINE_LOCK = threading.Lock()
 _PIPELINES = {}

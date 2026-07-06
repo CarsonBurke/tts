@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag used by the uv-managed daemon package.
         required: false
-        default: v0.1.3
+        default: v0.1.4
   release:
     types: [created]
 

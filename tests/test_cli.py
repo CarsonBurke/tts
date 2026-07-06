@@ -20,7 +20,7 @@ def test_vibevoice_default_model_is_realtime_0_5b():
 
 def test_builtin_default_backend_is_kokoro():
     assert BUILTIN_DEFAULTS["backend"] == "kokoro"
-    assert BUILTIN_DEFAULTS["speaker"] == "af_heart"
+    assert BUILTIN_DEFAULTS["speaker"] == "af_samantha"
     assert BUILTIN_DEFAULTS["speed"] == 1.25
     assert BUILTIN_DEFAULTS["daemon"] is True
     assert BUILTIN_DEFAULTS["daemon_idle_seconds"] == 1800
