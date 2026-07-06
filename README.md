@@ -13,6 +13,11 @@ The command is intentionally thin. It does not redact, truncate, skip focus, or
 decide when speech is important. That policy belongs to the orchestrator agent.
 `--level` is accepted as caller metadata but is not interpreted by the CLI.
 
+The Kokoro backend uses a local warm daemon by default. The first start loads
+and warms the model; later `tts speak ...` calls send text to that process so
+short status updates can begin much faster than a fresh neural TTS process. The
+daemon exits after 30 idle minutes by default.
+
 ## Backends
 
 - `vibevoice`: Uses Microsoft's official VibeVoice Realtime runtime for
@@ -65,6 +70,8 @@ model_size = 0.5
 device = auto
 provider = auto
 num_threads = 4
+daemon = true
+daemon_idle_seconds = 1800
 ```
 
 For ONNX models, the same model-path flags can be configured:
@@ -91,8 +98,30 @@ Build a self-contained release binary:
 
 ```bash
 scripts/build-binary.sh
-dist/tts speak "How are you doing?"
+dist/tts/tts speak "How are you doing?"
 ```
+
+Release assets are directory archives. The top-level `tts` executable is a
+small native daemon client; the heavier Python runtime lives under
+`tts-daemon/`. Single-file Python bundles add seconds of startup latency before
+the command can contact the warm daemon, so they are not suitable for the fast
+path.
+
+## Daemon
+
+Start and warm the daemon explicitly:
+
+```bash
+tts daemon start
+tts daemon status
+tts speak "Build finished and review is waiting."
+tts daemon stop
+```
+
+`tts speak` also auto-starts the daemon when the selected backend is Kokoro and
+`daemon = true`. Use `--no-daemon` or `daemon = false` to force one-shot local
+synthesis. Use `--daemon-required` when a caller would rather fail than fall
+back to slow local synthesis.
 
 Optional VibeVoice support:
 

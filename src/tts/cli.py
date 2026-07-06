@@ -22,6 +22,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.command == "benchmark":
         _run_benchmark(args)
         return
+    if args.command == "daemon":
+        _run_daemon(args)
+        return
     raise SpeechError(f"Unknown command: {args.command}")
 
 
@@ -43,10 +46,13 @@ def _run_speak(args: argparse.Namespace) -> None:
 
     _apply_defaults(args, config)
     text = _resolve_text(args)
-    request = _request_from_args(args, text, Path(args.output).expanduser() if args.output else None, not args.no_play)
+    request = _request_from_args(args, text, _path_arg(args.output), not args.no_play)
 
     try:
-        result = _speak_with_backend(args.backend, request, _onnx_config(args))
+        if _should_use_daemon(args):
+            result = _speak_with_daemon(args, request)
+        else:
+            result = _speak_with_backend(args.backend, request, _onnx_config(args))
     except SpeechError as exc:
         print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -56,6 +62,39 @@ def _run_speak(args: argparse.Namespace) -> None:
 
     if args.print_result:
         print(result.output_path if result.output_path is not None else result.backend)
+
+
+def _run_daemon(args: argparse.Namespace) -> None:
+    from . import daemon
+
+    try:
+        if args.daemon_command == "start":
+            config = load_config(args.config, disabled=False)
+            idle_seconds = resolve_option("daemon_idle_seconds", args.idle_seconds, config)
+            start_timeout = resolve_option("daemon_start_timeout", args.start_timeout, config)
+            result = daemon.start(args.config, idle_seconds, start_timeout)
+            if not args.quiet:
+                print(f"running pid={result.get('pid')} port={result.get('port')} idle_seconds={result.get('idle_seconds')}")
+            return
+        if args.daemon_command == "serve":
+            daemon.serve(args.config, args.idle_seconds)
+            return
+        if args.daemon_command == "stop":
+            stopped = daemon.stop()
+            print("stopped" if stopped else "not running")
+            return
+        if args.daemon_command == "status":
+            result = daemon.status()
+            if result.get("running"):
+                ready = "ready" if result.get("ready") else "starting"
+                print(f"running {ready} pid={result.get('pid')} port={result.get('port')} idle_seconds={result.get('idle_seconds')}")
+            else:
+                print("not running")
+            return
+    except daemon.DaemonError as exc:
+        print(f"tts: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    raise SpeechError(f"Unknown daemon command: {args.daemon_command}")
 
 
 def _run_benchmark(args: argparse.Namespace) -> None:
@@ -161,6 +200,22 @@ def _speak_with_backend(backend: str, request: SpeakRequest, onnx_config: dict[s
     raise SpeechError(f"Unsupported backend: {backend}")
 
 
+def _speak_with_daemon(args: argparse.Namespace, request: SpeakRequest):
+    from . import daemon
+
+    try:
+        daemon.ensure_running(args.config, args.daemon_idle_seconds, args.daemon_start_timeout)
+        return daemon.speak(request)
+    except (daemon.DaemonError, OSError) as exc:
+        if args.daemon_required:
+            raise SpeechError(str(exc)) from exc
+        return _speak_with_backend(args.backend, request, _onnx_config(args))
+
+
+def _should_use_daemon(args: argparse.Namespace) -> bool:
+    return bool(args.daemon) and args.backend == "kokoro"
+
+
 def _request_from_args(args: argparse.Namespace, text: str, output: Optional[Path], play: bool) -> SpeakRequest:
     return SpeakRequest(
         text=text,
@@ -176,11 +231,20 @@ def _request_from_args(args: argparse.Namespace, text: str, output: Optional[Pat
         num_threads=args.num_threads,
         language=args.language,
         instruct=args.instruct,
-        reference_audio=Path(args.reference_audio).expanduser() if args.reference_audio else None,
+        reference_audio=_path_arg(args.reference_audio),
         reference_text=args.reference_text,
         exaggeration=args.exaggeration,
         cfg_weight=args.cfg_weight,
     )
+
+
+def _path_arg(value: Optional[str]) -> Optional[Path]:
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return path.resolve()
 
 
 def _resolve_text(args: argparse.Namespace) -> str:
@@ -295,6 +359,7 @@ def _parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("speak", parents=[_speak_parser(add_help=False)], add_help=True)
     subcommands.add_parser("benchmark", parents=[_benchmark_parser(add_help=False)], add_help=True)
+    _add_daemon_parser(subcommands)
     return parser
 
 
@@ -367,3 +432,27 @@ def _add_speak_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tts-rule-fsts")
     parser.add_argument("--max-num-sentences", type=int)
     parser.add_argument("--debug", action="store_true", default=None)
+    daemon_group = parser.add_mutually_exclusive_group()
+    daemon_group.add_argument("--daemon", dest="daemon", action="store_true", default=None, help="Use the local daemon when supported.")
+    daemon_group.add_argument("--no-daemon", dest="daemon", action="store_false", help="Run synthesis in this process.")
+    parser.add_argument("--daemon-required", action="store_true", help="Fail instead of falling back when daemon speech fails.")
+    parser.add_argument("--daemon-idle-seconds", type=int, help="Seconds before the daemon exits after inactivity.")
+    parser.add_argument("--daemon-start-timeout", type=float, help="Seconds to wait while starting and warming the daemon.")
+
+
+def _add_daemon_parser(subcommands) -> None:
+    parser = subcommands.add_parser("daemon", help="Manage the local warm TTS daemon.")
+    daemon_commands = parser.add_subparsers(dest="daemon_command", required=True)
+
+    start = daemon_commands.add_parser("start", help="Start and warm the daemon.")
+    start.add_argument("--config", help="Read defaults from this config file.")
+    start.add_argument("--idle-seconds", type=int, help="Exit after this many idle seconds.")
+    start.add_argument("--start-timeout", type=float, help="Seconds to wait for warm startup.")
+    start.add_argument("--quiet", action="store_true", help="Do not print startup status.")
+
+    serve = daemon_commands.add_parser("serve", help="Run the daemon in the foreground.")
+    serve.add_argument("--config", help="Read defaults from this config file.")
+    serve.add_argument("--idle-seconds", type=int, default=1800, help="Exit after this many idle seconds.")
+
+    daemon_commands.add_parser("stop", help="Stop the daemon.")
+    daemon_commands.add_parser("status", help="Show daemon status.")

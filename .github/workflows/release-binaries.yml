@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to upload assets to.
         required: false
-        default: v0.1.1
+        default: v0.1.2
   release:
     types: [created]
 
@@ -22,11 +22,11 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            artifact: tts-macos-arm64
+            artifact: tts-macos-arm64.zip
           - os: ubuntu-24.04
-            artifact: tts-linux-x64
+            artifact: tts-linux-x64.zip
           - os: windows-2025
-            artifact: tts-windows-x64.exe
+            artifact: tts-windows-x64.zip
 
     steps:
       - uses: actions/checkout@v5
@@ -34,6 +34,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
 
       - name: Build binary
         shell: bash
@@ -45,10 +49,11 @@ jobs:
           python -m pip install -e ".[kokoro]"
           python -m pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
           python -m pip install pyinstaller
+          rm -rf dist/tts dist/tts-daemon build/tts-daemon
           pyinstaller \
             --clean \
-            --onefile \
-            --name tts \
+            --onedir \
+            --name tts-daemon \
             --collect-all kokoro \
             --collect-all misaki \
             --collect-data language_tags \
@@ -59,6 +64,7 @@ jobs:
             --collect-data spacy \
             --collect-data thinc \
             --collect-submodules spacy.lang.en \
+            --hidden-import tts.daemon \
             --hidden-import tts.backends.kokoro \
             --hidden-import tts.backends.system \
             scripts/tts_launcher.py
@@ -67,12 +73,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
+          bundle="${{ matrix.artifact }}"
+          bundle="${bundle%.zip}"
+          mkdir -p "release/$bundle"
+          mv dist/tts-daemon "release/$bundle/tts-daemon"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp dist/tts.exe "release/${{ matrix.artifact }}"
+            go build -o "release/$bundle/tts.exe" ./cmd/tts-client
+            test -f "release/$bundle/tts.exe"
+            test -f "release/$bundle/tts-daemon/tts-daemon.exe"
           else
-            cp dist/tts "release/${{ matrix.artifact }}"
-            chmod +x "release/${{ matrix.artifact }}"
+            go build -o "release/$bundle/tts" ./cmd/tts-client
+            chmod +x "release/$bundle/tts"
+            chmod +x "release/$bundle/tts-daemon/tts-daemon"
           fi
+          (cd release && python -m zipfile -c "${{ matrix.artifact }}" "$bundle")
           if command -v shasum >/dev/null 2>&1; then
             (cd release && shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256")
           else

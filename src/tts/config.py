@@ -48,6 +48,9 @@ CONFIGURABLE_NAMES = (
     "tts_rule_fsts",
     "max_num_sentences",
     "debug",
+    "daemon",
+    "daemon_idle_seconds",
+    "daemon_start_timeout",
 )
 
 BUILTIN_DEFAULTS = {
@@ -69,6 +72,9 @@ BUILTIN_DEFAULTS = {
     "tts_rule_fsts": "",
     "max_num_sentences": 1,
     "debug": False,
+    "daemon": True,
+    "daemon_idle_seconds": 1800,
+    "daemon_start_timeout": 45,
 }
 
 CHOICES = {
@@ -82,6 +88,8 @@ TYPES: dict[str, Callable[[str], object]] = {
     "cfg_weight": float,
     "num_threads": int,
     "max_num_sentences": int,
+    "daemon_idle_seconds": int,
+    "daemon_start_timeout": float,
 }
 
 
@@ -141,7 +149,7 @@ def resolve_option(name: str, explicit_value: object, config: dict[str, object])
 
 
 def _coerce_value(name: str, raw_value: str, config_path: Path) -> object:
-    if name == "debug":
+    if name in ("debug", "daemon"):
         return _coerce_bool(name, raw_value, config_path)
 
     converter = TYPES.get(name)

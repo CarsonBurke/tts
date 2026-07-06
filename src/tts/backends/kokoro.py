@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 import sys
+import threading
 import warnings
 
 from . import SpeakRequest, SpeechResult
@@ -14,6 +15,8 @@ DEFAULT_MODEL = "hexgrad/Kokoro-82M"
 DEFAULT_LANGUAGE = "a"
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SAMPLE_RATE = 24000
+_PIPELINE_LOCK = threading.Lock()
+_PIPELINES = {}
 
 
 def speak(request: SpeakRequest) -> SpeechResult:
@@ -31,7 +34,7 @@ def speak(request: SpeakRequest) -> SpeechResult:
         raise SpeechError("Kokoro Python backend does not support --model; use the ONNX backend for custom paths.")
 
     with _quiet_known_runtime_warnings():
-        pipeline = KPipeline(lang_code=request.language or DEFAULT_LANGUAGE, repo_id=DEFAULT_MODEL, device=device)
+        pipeline = _pipeline(KPipeline, request.language or DEFAULT_LANGUAGE, device)
         generator = pipeline(request.text, voice=str(request.speaker or DEFAULT_VOICE), speed=request.speed)
         audios = [chunk_audio for _, _, chunk_audio in generator if chunk_audio is not None]
     if not audios:
@@ -43,6 +46,33 @@ def speak(request: SpeakRequest) -> SpeechResult:
     if request.play:
         play_wav(output)
     return SpeechResult(backend="kokoro", sample_rate=DEFAULT_SAMPLE_RATE, output_path=output)
+
+
+def warm(request: SpeakRequest) -> None:
+    with _quiet_known_runtime_warnings():
+        try:
+            from kokoro import KPipeline
+        except ImportError as exc:
+            raise SpeechError(
+                "Kokoro backend requires optional dependencies. "
+                'Install with: python -m pip install -e ".[kokoro]"'
+            ) from exc
+
+        device = resolve_torch_device(request.device)
+        pipeline = _pipeline(KPipeline, request.language or DEFAULT_LANGUAGE, device)
+        generator = pipeline(request.text, voice=str(request.speaker or DEFAULT_VOICE), speed=request.speed)
+        for _, _, _ in generator:
+            pass
+
+
+def _pipeline(KPipeline, language: str, device: str):
+    key = (language, device)
+    with _PIPELINE_LOCK:
+        pipeline = _PIPELINES.get(key)
+        if pipeline is None:
+            pipeline = KPipeline(lang_code=language, repo_id=DEFAULT_MODEL, device=device)
+            _PIPELINES[key] = pipeline
+        return pipeline
 
 
 @contextmanager

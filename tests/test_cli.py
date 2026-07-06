@@ -4,7 +4,7 @@ import pytest
 
 from tts.backends.onnx import resolve_provider
 from tts.backends.vibevoice import resolve_device, resolve_model
-from tts.cli import _apply_defaults, _benchmark_variants, _resolve_text, _speak_parser
+from tts.cli import _apply_defaults, _benchmark_variants, _resolve_text, _should_use_daemon, _speak_parser
 from tts.audio import _to_pcm16
 from tts.backends import SpeakRequest
 from tts.backends import system
@@ -22,6 +22,8 @@ def test_builtin_default_backend_is_kokoro():
     assert BUILTIN_DEFAULTS["backend"] == "kokoro"
     assert BUILTIN_DEFAULTS["speaker"] == "af_heart"
     assert BUILTIN_DEFAULTS["speed"] == 1.25
+    assert BUILTIN_DEFAULTS["daemon"] is True
+    assert BUILTIN_DEFAULTS["daemon_idle_seconds"] == 1800
 
 
 def test_vibevoice_1_5b_model_alias():
@@ -112,6 +114,33 @@ def test_cli_options_override_config_file(tmp_path):
     assert args.backend == "onnx"
     assert args.speed == 0.9
     assert args.voice == "Samantha"
+
+
+def test_daemon_config_defaults_are_configurable(tmp_path):
+    config_path = tmp_path / "config.ini"
+    config_path.write_text("[speak]\ndaemon = false\ndaemon_idle_seconds = 60\ndaemon_start_timeout = 3.5\n", encoding="utf-8")
+
+    args = _speak_parser().parse_args(["hello"])
+    _apply_defaults(args, load_config(str(config_path), disabled=False))
+
+    assert args.daemon is False
+    assert args.daemon_idle_seconds == 60
+    assert args.daemon_start_timeout == 3.5
+
+
+def test_kokoro_uses_daemon_when_enabled():
+    args = _speak_parser().parse_args(["hello"])
+    _apply_defaults(args, {})
+
+    assert args.backend == "kokoro"
+    assert _should_use_daemon(args) is True
+
+
+def test_no_daemon_disables_daemon_path():
+    args = _speak_parser().parse_args(["--no-daemon", "hello"])
+    _apply_defaults(args, {})
+
+    assert _should_use_daemon(args) is False
 
 
 def test_model_backend_options_are_configurable(tmp_path):
