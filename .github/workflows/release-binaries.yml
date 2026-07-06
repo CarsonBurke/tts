@@ -5,6 +5,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.os }}
@@ -62,14 +65,23 @@ jobs:
             cp dist/stt "release/${{ matrix.artifact }}"
             chmod +x "release/${{ matrix.artifact }}"
           fi
+          if command -v shasum >/dev/null 2>&1; then
+            (cd release && shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256")
+          else
+            (cd release && sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256")
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: release/${{ matrix.artifact }}
+          path: |
+            release/${{ matrix.artifact }}
+            release/${{ matrix.artifact }}.sha256
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: release/${{ matrix.artifact }}
+          files: |
+            release/${{ matrix.artifact }}
+            release/${{ matrix.artifact }}.sha256
