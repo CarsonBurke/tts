@@ -1,0 +1,75 @@
+name: Release binaries
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            artifact: stt-macos-arm64
+          - os: ubuntu-24.04
+            artifact: stt-linux-x64
+          - os: windows-2025
+            artifact: stt-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build binary
+        shell: bash
+        run: |
+          python -m pip install -U pip "setuptools<82" wheel
+          python -m pip install -e ".[kokoro]"
+          python -m pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+          python -m pip install pyinstaller
+          pyinstaller \
+            --clean \
+            --onefile \
+            --name stt \
+            --collect-all kokoro \
+            --collect-all misaki \
+            --collect-data language_tags \
+            --collect-data csvw \
+            --collect-data segments \
+            --collect-data espeakng_loader \
+            --collect-all en_core_web_sm \
+            --collect-data spacy \
+            --collect-data thinc \
+            --collect-submodules spacy.lang.en \
+            --hidden-import stt_cli.backends.kokoro \
+            --hidden-import stt_cli.backends.system \
+            scripts/stt_launcher.py
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mkdir -p release
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp dist/stt.exe "release/${{ matrix.artifact }}"
+          else
+            cp dist/stt "release/${{ matrix.artifact }}"
+            chmod +x "release/${{ matrix.artifact }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/${{ matrix.artifact }}
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/${{ matrix.artifact }}

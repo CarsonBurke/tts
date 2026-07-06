@@ -40,6 +40,7 @@ models = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
+stt = "stt_cli.cli:main"
 stt-cli = "stt_cli.cli:main"
 stt-say = "stt_cli.cli:main_say"
 

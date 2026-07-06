@@ -6,6 +6,7 @@ Despite the repository name, this package currently focuses on text-to-speech
 for orchestrator agents:
 
 ```bash
+stt speak "How are you doing?"
 stt-say "Build finished, but the database migration test is failing."
 stt-cli speak --backend kokoro --speaker af_heart "Review is blocked on an auth decision."
 stt-say --level blocked --title "Blocked" --body "Need migration approval."
@@ -87,6 +88,13 @@ speed = 1.05
 
 ```bash
 python -m pip install -e .
+```
+
+Build a self-contained release binary:
+
+```bash
+scripts/build-binary.sh
+dist/stt speak "How are you doing?"
 ```
 
 Optional VibeVoice support:
