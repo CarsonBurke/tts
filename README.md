@@ -5,7 +5,7 @@ Cross-platform text-to-speech CLI for agent status updates.
 ```bash
 tts speak "How are you doing?"
 tts-say "Build finished, but the database migration test is failing."
-tts speak --backend kokoro --speaker af_samantha "Review is blocked on an auth decision."
+tts speak --backend kokoro --speaker af_sarah "Review is blocked on an auth decision."
 tts-say --level blocked --title "Blocked" --body "Need migration approval."
 ```
 
@@ -28,7 +28,7 @@ idle minutes by default.
   `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` with speaker `Aiden`.
 - `chatterbox`: Uses ResembleAI Chatterbox.
 - `kokoro`: Uses the native Kokoro Python pipeline. Defaults to
-  `hexgrad/Kokoro-82M` with voice `af_samantha`.
+  `hexgrad/Kokoro-82M` with voice `af_sarah`.
 - `neutts`: Uses NeuTTS Nano. Requires reference audio and transcript.
 - `omnivoice`: Uses k2-fsa OmniVoice. Requires reference audio and transcript.
 - `onnx`: Uses `sherpa-onnx` offline TTS over ONNX model families such as
@@ -36,7 +36,7 @@ idle minutes by default.
 - `system`: Uses platform speech tools when available (`say` on macOS, SAPI on
   Windows, `spd-say`/`espeak`/`espeak-ng` on Linux).
 
-The built-in default is Kokoro with `af_samantha`, `speed = 1.25`, and
+The built-in default is Kokoro with `af_sarah`, `speed = 1.25`, and
 `device = auto`. `auto` remains available and tries VibeVoice first, then ONNX
 if a model is configured, then system speech.
 
@@ -65,7 +65,7 @@ Example:
 ```ini
 [speak]
 backend = kokoro
-speaker = af_samantha
+speaker = af_sarah
 speed = 1.25
 model_size = 0.5
 device = auto
@@ -188,7 +188,7 @@ Individual examples:
   "Build finished. One migration test is failing and needs review."
 
 .venv-kokoro/bin/tts benchmark --backend kokoro --runs 2 \
-  --language a --speaker af_samantha \
+  --language a --speaker af_sarah \
   "Build finished. One migration test is failing and needs review."
 
 .venv-vibevoice/bin/tts benchmark --backend vibevoice --runs 2 \

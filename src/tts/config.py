@@ -55,7 +55,7 @@ CONFIGURABLE_NAMES = (
 
 BUILTIN_DEFAULTS = {
     "backend": "kokoro",
-    "speaker": "af_samantha",
+    "speaker": "af_sarah",
     "speed": 1.25,
     "device": "auto",
     "model_size": "0.5",
