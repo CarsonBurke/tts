@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to upload assets to.
         required: false
-        default: v0.1.0
+        default: v0.1.1
   release:
     types: [created]
 
@@ -22,11 +22,11 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            artifact: stt-macos-arm64
+            artifact: tts-macos-arm64
           - os: ubuntu-24.04
-            artifact: stt-linux-x64
+            artifact: tts-linux-x64
           - os: windows-2025
-            artifact: stt-windows-x64.exe
+            artifact: tts-windows-x64.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -48,7 +48,7 @@ jobs:
           pyinstaller \
             --clean \
             --onefile \
-            --name stt \
+            --name tts \
             --collect-all kokoro \
             --collect-all misaki \
             --collect-data language_tags \
@@ -59,18 +59,18 @@ jobs:
             --collect-data spacy \
             --collect-data thinc \
             --collect-submodules spacy.lang.en \
-            --hidden-import stt_cli.backends.kokoro \
-            --hidden-import stt_cli.backends.system \
-            scripts/stt_launcher.py
+            --hidden-import tts.backends.kokoro \
+            --hidden-import tts.backends.system \
+            scripts/tts_launcher.py
 
       - name: Rename artifact
         shell: bash
         run: |
           mkdir -p release
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp dist/stt.exe "release/${{ matrix.artifact }}"
+            cp dist/tts.exe "release/${{ matrix.artifact }}"
           else
-            cp dist/stt "release/${{ matrix.artifact }}"
+            cp dist/tts "release/${{ matrix.artifact }}"
             chmod +x "release/${{ matrix.artifact }}"
           fi
           if command -v shasum >/dev/null 2>&1; then

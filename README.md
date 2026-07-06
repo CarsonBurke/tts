@@ -1,15 +1,12 @@
-# stt-cli
+# tts
 
-Cross-platform speech CLI for agent status updates.
-
-Despite the repository name, this package currently focuses on text-to-speech
-for orchestrator agents:
+Cross-platform text-to-speech CLI for agent status updates.
 
 ```bash
-stt speak "How are you doing?"
-stt-say "Build finished, but the database migration test is failing."
-stt-cli speak --backend kokoro --speaker af_heart "Review is blocked on an auth decision."
-stt-say --level blocked --title "Blocked" --body "Need migration approval."
+tts speak "How are you doing?"
+tts-say "Build finished, but the database migration test is failing."
+tts speak --backend kokoro --speaker af_heart "Review is blocked on an auth decision."
+tts-say --level blocked --title "Blocked" --body "Need migration approval."
 ```
 
 The command is intentionally thin. It does not redact, truncate, skip focus, or
@@ -45,16 +42,16 @@ override config values, and built-in defaults apply when neither is provided.
 Print the default config path:
 
 ```bash
-stt-say --print-config-path
+tts-say --print-config-path
 ```
 
 Default locations:
 
-- macOS: `~/Library/Application Support/stt-cli/config.ini`
-- Linux: `$XDG_CONFIG_HOME/stt-cli/config.ini` or `~/.config/stt-cli/config.ini`
-- Windows: `%APPDATA%\stt-cli\config.ini`
+- macOS: `~/Library/Application Support/tts/config.ini`
+- Linux: `$XDG_CONFIG_HOME/tts/config.ini` or `~/.config/tts/config.ini`
+- Windows: `%APPDATA%\tts\config.ini`
 
-Use `STT_CLI_CONFIG=/path/to/config.ini` or `--config /path/to/config.ini` to
+Use `TTS_CONFIG=/path/to/config.ini` or `--config /path/to/config.ini` to
 choose a different file. Use `--no-config` to ignore config.
 
 Example:
@@ -94,7 +91,7 @@ Build a self-contained release binary:
 
 ```bash
 scripts/build-binary.sh
-dist/stt speak "How are you doing?"
+dist/tts speak "How are you doing?"
 ```
 
 Optional VibeVoice support:
@@ -120,7 +117,7 @@ python -m pip install -e ".[onnx]"
 ## VibeVoice
 
 ```bash
-stt-say --backend vibevoice --model-size 0.5 --speaker Emma "The orchestrator needs input."
+tts-say --backend vibevoice --model-size 0.5 --speaker Emma "The orchestrator needs input."
 ```
 
 The 0.5B model is the default because it is intended for real-time TTS. It uses
@@ -143,22 +140,22 @@ scripts/benchmark-model-candidates.sh
 Individual examples:
 
 ```bash
-.venv-qwen3/bin/stt-cli benchmark --backend qwen3 --runs 2 \
+.venv-qwen3/bin/tts benchmark --backend qwen3 --runs 2 \
   --speaker Aiden --language English \
   "Build finished. One migration test is failing and needs review."
 
-.venv-chatterbox/bin/stt-cli benchmark --backend chatterbox --runs 2 \
+.venv-chatterbox/bin/tts benchmark --backend chatterbox --runs 2 \
   "Build finished. One migration test is failing and needs review."
 
-.venv-kokoro/bin/stt-cli benchmark --backend kokoro --runs 2 \
+.venv-kokoro/bin/tts benchmark --backend kokoro --runs 2 \
   --language a --speaker af_heart \
   "Build finished. One migration test is failing and needs review."
 
-.venv-vibevoice/bin/stt-cli benchmark --backend vibevoice --runs 2 \
+.venv-vibevoice/bin/tts benchmark --backend vibevoice --runs 2 \
   --model-size 0.5 \
   "Build finished. One migration test is failing and needs review."
 
-.venv-vibevoice/bin/stt-cli benchmark --backend vibevoice --runs 2 \
+.venv-vibevoice/bin/tts benchmark --backend vibevoice --runs 2 \
   --model-size 1.5 \
   "Build finished. One migration test is failing and needs review."
 # Currently expected to report an unsupported architecture error.
@@ -167,12 +164,12 @@ Individual examples:
 Reference-based models:
 
 ```bash
-.venv-neutts/bin/stt-cli benchmark --backend neutts --runs 2 \
+.venv-neutts/bin/tts benchmark --backend neutts --runs 2 \
   --reference-audio ./reference.wav \
   --reference-text "Exact transcript of the reference clip." \
   "Build finished. One migration test is failing and needs review."
 
-.venv-omnivoice/bin/stt-cli benchmark --backend omnivoice --runs 2 \
+.venv-omnivoice/bin/tts benchmark --backend omnivoice --runs 2 \
   --reference-audio ./reference.wav \
   --reference-text "Exact transcript of the reference clip." \
   "Build finished. One migration test is failing and needs review."
@@ -183,7 +180,7 @@ Reference-based models:
 For a Piper/VITS-style sherpa-onnx model:
 
 ```bash
-stt-say --backend onnx \
+tts-say --backend onnx \
   --onnx-kind vits \
   --vits-model ./vits-piper-en_US-lessac-medium/en_US-lessac-medium.onnx \
   --vits-tokens ./vits-piper-en_US-lessac-medium/tokens.txt \
@@ -194,7 +191,7 @@ stt-say --backend onnx \
 For Kokoro:
 
 ```bash
-stt-say --backend onnx \
+tts-say --backend onnx \
   --onnx-kind kokoro \
   --kokoro-model ./kokoro/model.onnx \
   --kokoro-voices ./kokoro/voices.bin \
@@ -225,14 +222,14 @@ GPU or the Neural Engine depending on the model and provider support.
 Benchmark generation latency and live battery/power readings:
 
 ```bash
-stt-cli benchmark --backend vibevoice --runs 3 \
+tts benchmark --backend vibevoice --runs 3 \
   "Agent status benchmark. Build finished and review is waiting."
 ```
 
 For ONNX:
 
 ```bash
-stt-cli benchmark --backend onnx --runs 3 \
+tts benchmark --backend onnx --runs 3 \
   --onnx-kind kokoro \
   --kokoro-model ./kokoro/model.onnx \
   --kokoro-voices ./kokoro/voices.bin \

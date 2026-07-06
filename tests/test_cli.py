@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from stt_cli.backends.onnx import resolve_provider
-from stt_cli.backends.vibevoice import resolve_device, resolve_model
-from stt_cli.cli import _apply_defaults, _benchmark_variants, _resolve_text, _speak_parser
-from stt_cli.audio import _to_pcm16
-from stt_cli.backends import SpeakRequest
-from stt_cli.backends import system
-from stt_cli.backends.model_audio import _to_mono_samples
-from stt_cli.audio import SpeechError
-from stt_cli.config import load_config, BUILTIN_DEFAULTS
-from stt_cli.power import _parse_ioreg_battery
+from tts.backends.onnx import resolve_provider
+from tts.backends.vibevoice import resolve_device, resolve_model
+from tts.cli import _apply_defaults, _benchmark_variants, _resolve_text, _speak_parser
+from tts.audio import _to_pcm16
+from tts.backends import SpeakRequest
+from tts.backends import system
+from tts.backends.model_audio import _to_mono_samples
+from tts.audio import SpeechError
+from tts.config import load_config, BUILTIN_DEFAULTS
+from tts.power import _parse_ioreg_battery
 
 
 def test_vibevoice_default_model_is_realtime_0_5b():
@@ -52,19 +52,19 @@ def test_vibevoice_invalid_cuda_device_fails():
 
 
 def test_onnx_auto_provider_prefers_coreml_on_macos(monkeypatch):
-    monkeypatch.setattr("stt_cli.backends.onnx.sys.platform", "darwin")
+    monkeypatch.setattr("tts.backends.onnx.sys.platform", "darwin")
     assert resolve_provider("auto") == "coreml"
 
 
 def test_onnx_auto_provider_uses_cuda_when_nvidia_is_present(monkeypatch):
-    monkeypatch.setattr("stt_cli.backends.onnx.sys.platform", "linux")
-    monkeypatch.setattr("stt_cli.backends.onnx.shutil.which", lambda name: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr("tts.backends.onnx.sys.platform", "linux")
+    monkeypatch.setattr("tts.backends.onnx.shutil.which", lambda name: "/usr/bin/nvidia-smi")
     assert resolve_provider("auto") == "cuda"
 
 
 def test_onnx_auto_provider_falls_back_to_cpu(monkeypatch):
-    monkeypatch.setattr("stt_cli.backends.onnx.sys.platform", "linux")
-    monkeypatch.setattr("stt_cli.backends.onnx.shutil.which", lambda name: None)
+    monkeypatch.setattr("tts.backends.onnx.sys.platform", "linux")
+    monkeypatch.setattr("tts.backends.onnx.shutil.which", lambda name: None)
     assert resolve_provider("auto") == "cpu"
 
 
@@ -151,8 +151,8 @@ def test_invalid_config_option_fails(tmp_path):
 
 
 def test_system_backend_maps_speed_to_macos_say_rate(monkeypatch):
-    monkeypatch.setattr("stt_cli.backends.system.sys.platform", "darwin")
-    monkeypatch.setattr("stt_cli.backends.system.shutil.which", lambda name: "/usr/bin/say")
+    monkeypatch.setattr("tts.backends.system.sys.platform", "darwin")
+    monkeypatch.setattr("tts.backends.system.shutil.which", lambda name: "/usr/bin/say")
     request = SpeakRequest(text="hello", output=None, play=True, voice="Flo", speed=1.25)
 
     assert system._speak_command(request) == ["say", "-v", "Flo", "-r", "219", "hello"]

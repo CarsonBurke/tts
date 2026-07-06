@@ -12,14 +12,14 @@ run_benchmark() {
   shift
 
   echo "== $backend =="
-  if [[ ! -x "$env_dir/bin/stt-cli" ]]; then
-    echo "Missing $env_dir/bin/stt-cli; run scripts/install-model-candidate-envs.sh first."
+  if [[ ! -x "$env_dir/bin/tts" ]]; then
+    echo "Missing $env_dir/bin/tts; run scripts/install-model-candidate-envs.sh first."
     echo
     return 0
   fi
 
   echo "Python: $("$env_dir/bin/python" --version 2>&1)"
-  "$env_dir/bin/stt-cli" benchmark --backend "$backend" --runs "$RUNS" "$@" "$TEXT" || true
+  "$env_dir/bin/tts" benchmark --backend "$backend" --runs "$RUNS" "$@" "$TEXT" || true
   echo
 }
 

@@ -86,22 +86,22 @@ TYPES: dict[str, Callable[[str], object]] = {
 
 
 def default_config_path() -> Path:
-    if "STT_CLI_CONFIG" in os.environ:
-        return Path(os.environ["STT_CLI_CONFIG"]).expanduser()
+    if "TTS_CONFIG" in os.environ:
+        return Path(os.environ["TTS_CONFIG"]).expanduser()
 
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         if base:
-            return Path(base) / "stt-cli" / "config.ini"
-        return Path.home() / "AppData" / "Roaming" / "stt-cli" / "config.ini"
+            return Path(base) / "tts" / "config.ini"
+        return Path.home() / "AppData" / "Roaming" / "tts" / "config.ini"
 
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "stt-cli" / "config.ini"
+        return Path.home() / "Library" / "Application Support" / "tts" / "config.ini"
 
     base = os.environ.get("XDG_CONFIG_HOME")
     if base:
-        return Path(base) / "stt-cli" / "config.ini"
-    return Path.home() / ".config" / "stt-cli" / "config.ini"
+        return Path(base) / "tts" / "config.ini"
+    return Path.home() / ".config" / "tts" / "config.ini"
 
 
 def load_config(path: Optional[str], disabled: bool) -> dict[str, object]:

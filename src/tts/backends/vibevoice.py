@@ -165,7 +165,7 @@ def _streaming_voice_path(speaker: Any) -> Path:
         else:
             available = ", ".join(sorted(STREAMING_VOICES))
             raise SpeechError(f"Unknown VibeVoice Realtime voice '{speaker}'. Available voices: {available}")
-    cache_path = Path.home() / ".cache" / "stt-cli" / "vibevoice" / "voices" / filename
+    cache_path = Path.home() / ".cache" / "tts" / "vibevoice" / "voices" / filename
     if not cache_path.exists():
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(f"{VOICE_BASE_URL}/{filename}", cache_path)

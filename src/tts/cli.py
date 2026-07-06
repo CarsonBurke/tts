@@ -26,7 +26,7 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 def main_say(argv: Optional[list[str]] = None) -> None:
-    args = _speak_parser(prog="stt-say").parse_args(argv)
+    args = _speak_parser(prog="tts-say").parse_args(argv)
     _run_speak(args)
 
 
@@ -38,7 +38,7 @@ def _run_speak(args: argparse.Namespace) -> None:
     try:
         config = load_config(args.config, args.no_config)
     except SpeechError as exc:
-        print(f"stt-cli: {exc}", file=sys.stderr)
+        print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     _apply_defaults(args, config)
@@ -48,10 +48,10 @@ def _run_speak(args: argparse.Namespace) -> None:
     try:
         result = _speak_with_backend(args.backend, request, _onnx_config(args))
     except SpeechError as exc:
-        print(f"stt-cli: {exc}", file=sys.stderr)
+        print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     except subprocess.SubprocessError as exc:
-        print(f"stt-cli: command failed: {exc}", file=sys.stderr)
+        print(f"tts: command failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     if args.print_result:
@@ -62,20 +62,20 @@ def _run_benchmark(args: argparse.Namespace) -> None:
     try:
         config = load_config(args.config, args.no_config)
     except SpeechError as exc:
-        print(f"stt-cli: {exc}", file=sys.stderr)
+        print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     _apply_defaults(args, config)
     text = " ".join(args.text) if args.text else "Agent status benchmark. Build finished and review is waiting."
     rows: list[dict[str, object]] = []
     if args.runs < 1:
-        print("stt-cli: --runs must be at least 1", file=sys.stderr)
+        print("tts: --runs must be at least 1", file=sys.stderr)
         raise SystemExit(1)
 
     try:
         variants = _benchmark_variants(args)
     except SpeechError as exc:
-        print(f"stt-cli: {exc}", file=sys.stderr)
+        print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     for variant, overrides in variants:
@@ -291,7 +291,7 @@ def _format_watts(value: Optional[float]) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="stt-cli")
+    parser = argparse.ArgumentParser(prog="tts")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("speak", parents=[_speak_parser(add_help=False)], add_help=True)
     subcommands.add_parser("benchmark", parents=[_benchmark_parser(add_help=False)], add_help=True)
@@ -317,7 +317,7 @@ def _add_speak_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-config", action="store_true", help="Ignore config files.")
     parser.add_argument("--print-config-path", action="store_true", help="Print the default config path.")
     parser.add_argument("--text-stdin", action="store_true", help="Read text from stdin.")
-    parser.add_argument("--level", help="Caller-defined importance label. Not interpreted by stt-cli.")
+    parser.add_argument("--level", help="Caller-defined importance label. Not interpreted by tts.")
     parser.add_argument("--title", help="Short spoken title.")
     parser.add_argument("--body", help="Spoken update body.")
     parser.add_argument(

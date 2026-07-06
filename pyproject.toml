@@ -3,8 +3,8 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stt-cli"
-version = "0.1.0"
+name = "tts"
+version = "0.1.1"
 description = "Small cross-platform speech CLI for agent status updates."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -40,9 +40,9 @@ models = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-stt = "stt_cli.cli:main"
-stt-cli = "stt_cli.cli:main"
-stt-say = "stt_cli.cli:main_say"
+tts = "tts.cli:main"
+tts-cli = "tts.cli:main"
+tts-say = "tts.cli:main_say"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

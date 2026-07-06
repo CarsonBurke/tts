@@ -1,4 +1,4 @@
-from stt_cli.cli import main
+from tts.cli import main
 
 
 if __name__ == "__main__":
