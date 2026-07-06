@@ -91,22 +91,33 @@ speed = 1.05
 
 ## Install
 
+Recommended release install:
+
+```bash
+brew install uv
+uv tool install --python 3.12 "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@v0.1.7"
+tts speak "How are you doing?"
+```
+
+For local development:
+
 ```bash
 python -m pip install -e ".[kokoro]"
 ```
 
-Build the native release client:
+Release assets are tiny uv bootstrap launchers, not compiled native binaries.
+They do not bundle Python, Torch, or Kokoro. The launcher runs
+`uv tool install --python 3.12 ...` when the tagged package is missing or
+changed, then executes the installed `tts` console script directly. That avoids
+per-command `uv tool run` overhead while still installing dependencies on the
+machine when needed.
+
+Build release launchers:
 
 ```bash
-scripts/build-binary.sh
-dist/tts speak "How are you doing?"
+scripts/build-launchers.sh
+release/tts-macos-arm64 speak "How are you doing?"
 ```
-
-Release assets are small native clients. They do not bundle Torch, Kokoro, or
-Python. On first daemon start, the client uses `uv tool run --python 3.12
---from ...` to create/cache the Python daemon environment and install missing
-dependencies. Install `uv` once on the machine before using the Kokoro daemon
-path.
 
 ## Daemon
 
@@ -124,15 +135,14 @@ tts daemon stop
 synthesis. Use `--daemon-required` when a caller would rather fail than fall
 back to slow local synthesis.
 
-The native client uses the package embedded at build time, normally:
+The release launcher uses the package embedded at build time, normally:
 
 ```text
 tts[kokoro] @ git+https://github.com/CarsonBurke/tts@<release-tag>
 ```
 
-Override it with `TTS_DAEMON_PACKAGE`, choose another uv Python with
-`TTS_DAEMON_PYTHON`, or point at a local Python command with
-`TTS_DAEMON_COMMAND=/path/to/tts`.
+Override it with `TTS_PACKAGE`, choose another uv Python with `TTS_PYTHON`, or
+point the launcher at an existing installed tool with `TTS_TOOL_BIN`.
 
 Optional VibeVoice support:
 

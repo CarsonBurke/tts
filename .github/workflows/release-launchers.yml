@@ -1,0 +1,52 @@
+name: Release launchers
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag used by the uv-managed package.
+        required: false
+        default: v0.1.7
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build launchers
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build uv launchers
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: scripts/build-launchers.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tts-launchers
+          path: |
+            release/tts-macos-arm64
+            release/tts-macos-arm64.sha256
+            release/tts-linux-x64
+            release/tts-linux-x64.sha256
+            release/tts-windows-x64.cmd
+            release/tts-windows-x64.cmd.sha256
+
+      - name: Upload to release
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+          files: |
+            release/tts-macos-arm64
+            release/tts-macos-arm64.sha256
+            release/tts-linux-x64
+            release/tts-linux-x64.sha256
+            release/tts-windows-x64.cmd
+            release/tts-windows-x64.cmd.sha256
