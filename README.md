@@ -14,9 +14,10 @@ decide when speech is important. That policy belongs to the orchestrator agent.
 `--level` is accepted as caller metadata but is not interpreted by the CLI.
 
 The Kokoro backend uses a local warm daemon by default. The first start loads
-and warms the model; later `tts speak ...` calls send text to that process so
-short status updates can begin much faster than a fresh neural TTS process. The
-daemon exits after 30 idle minutes by default.
+and warms the model through a `uv`-managed Python environment; later
+`tts speak ...` calls send text to that process so short status updates can
+begin much faster than a fresh neural TTS process. The daemon exits after 30
+idle minutes by default.
 
 ## Backends
 
@@ -91,20 +92,20 @@ speed = 1.05
 ## Install
 
 ```bash
-python -m pip install -e .
+python -m pip install -e ".[kokoro]"
 ```
 
-Build a self-contained release binary:
+Build the native release client:
 
 ```bash
 scripts/build-binary.sh
-dist/tts/tts speak "How are you doing?"
+dist/tts speak "How are you doing?"
 ```
 
-Release assets are directory archives. The top-level `tts` executable is a
-small native daemon client; the heavier Python runtime lives under
-`tts-daemon/`. Single-file Python bundles add seconds of startup latency before
-the command can contact the warm daemon, so they are not suitable for the fast
+Release assets are small native clients. They do not bundle Torch, Kokoro, or
+Python. On first daemon start, the client uses `uv tool run --python 3.12
+--from ...` to create/cache the Python daemon environment and install missing
+dependencies. Install `uv` once on the machine before using the Kokoro daemon
 path.
 
 ## Daemon
@@ -122,6 +123,16 @@ tts daemon stop
 `daemon = true`. Use `--no-daemon` or `daemon = false` to force one-shot local
 synthesis. Use `--daemon-required` when a caller would rather fail than fall
 back to slow local synthesis.
+
+The native client uses the package embedded at build time, normally:
+
+```text
+tts[kokoro] @ git+https://github.com/CarsonBurke/tts@<release-tag>
+```
+
+Override it with `TTS_DAEMON_PACKAGE`, choose another uv Python with
+`TTS_DAEMON_PYTHON`, or point at a local Python command with
+`TTS_DAEMON_COMMAND=/path/to/tts`.
 
 Optional VibeVoice support:
 

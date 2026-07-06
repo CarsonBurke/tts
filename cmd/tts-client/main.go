@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+var daemonPackage = "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@main"
+var daemonPython = "3.12"
+
+const (
+	defaultIdleSeconds  = 30 * 60
+	defaultStartTimeout = 45 * time.Second
+)
+
 type daemonState struct {
 	Host  string `json:"host"`
 	Port  int    `json:"port"`
@@ -55,7 +63,7 @@ func runSpeak(args []string) {
 
 	state, err := liveState()
 	if err != nil || !state.Ready {
-		if err := startDaemon(args); err != nil {
+		if err := startDaemonForSpeak(args); err != nil {
 			fallbackOrDie(args, err)
 		}
 		state, err = liveState()
@@ -113,25 +121,103 @@ func runDaemon(args []string) {
 		}
 		_, _ = request(state, map[string]any{"command": "stop"}, 2*time.Second)
 		fmt.Println("stopped")
+	case "start":
+		options := daemonOptionsFromDaemonArgs(args[1:])
+		state, err := liveState()
+		if err == nil {
+			printDaemonStatus(state)
+			return
+		}
+		if err := startDaemon(options); err != nil {
+			fmt.Fprintln(os.Stderr, "tts:", err)
+			os.Exit(1)
+		}
+		state, err = waitForReady(options.startTimeout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tts:", err)
+			os.Exit(1)
+		}
+		if !hasFlag(args[1:], "--quiet") {
+			printDaemonStatus(state)
+		}
 	default:
 		execDaemon(append([]string{"daemon"}, args...))
 	}
 }
 
-func startDaemon(speakArgs []string) error {
-	daemonPath, err := daemonExecutable()
+func printDaemonStatus(state daemonState) {
+	ready := "starting"
+	if state.Ready {
+		ready = "ready"
+	}
+	fmt.Printf("running %s pid=%d port=%d\n", ready, state.PID, state.Port)
+}
+
+type daemonOptions struct {
+	configPath   string
+	noConfig     bool
+	idleSeconds  int
+	startTimeout time.Duration
+}
+
+func startDaemonForSpeak(speakArgs []string) error {
+	options := daemonOptionsFromSpeakArgs(speakArgs)
+	if err := startDaemon(options); err != nil {
+		return err
+	}
+	_, err := waitForReady(options.startTimeout)
+	return err
+}
+
+func startDaemon(options daemonOptions) error {
+	_ = os.Remove(statePath())
+	if err := os.MkdirAll(runtimeDir(), 0o700); err != nil {
+		return err
+	}
+	command, err := daemonCommand(daemonServeArgs(options))
 	if err != nil {
 		return err
 	}
-	args := []string{"daemon", "start", "--quiet"}
-	if config := configArg(speakArgs); config != "" {
-		args = append(args, "--config", config)
+	log, err := os.OpenFile(logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
 	}
-	cmd := exec.Command(daemonPath, args...)
+	defer log.Close()
+	cmd := exec.Command(command.path, command.args...)
 	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	cmd.Stdout = log
+	cmd.Stderr = log
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func daemonServeArgs(options daemonOptions) []string {
+	args := []string{"daemon", "serve", "--idle-seconds", strconv.Itoa(options.idleSeconds)}
+	if options.configPath != "" {
+		args = append(args, "--config", options.configPath)
+	}
+	return args
+}
+
+func waitForReady(timeout time.Duration) (daemonState, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		state, err := liveState()
+		if err == nil && state.Ready {
+			return state, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return daemonState{}, fmt.Errorf("daemon did not become ready within %.0fs: %w", timeout.Seconds(), lastErr)
+	}
+	return daemonState{}, fmt.Errorf("daemon did not become ready within %.0fs", timeout.Seconds())
 }
 
 func fallbackOrDie(speakArgs []string, cause error) {
@@ -143,7 +229,11 @@ func fallbackOrDie(speakArgs []string, cause error) {
 }
 
 func shouldBypassDaemon(args []string) bool {
-	if hasFlag(args, "--no-daemon") || hasFlag(args, "--text-stdin") {
+	if hasFlag(args, "--no-daemon") ||
+		hasFlag(args, "--text-stdin") ||
+		hasFlag(args, "--print-config-path") ||
+		hasFlag(args, "--help") ||
+		hasFlag(args, "-h") {
 		return true
 	}
 	if backend := optionValue(args, "--backend"); backend != "" && backend != "kokoro" {
@@ -217,6 +307,10 @@ func statePath() string {
 	return filepath.Join(runtimeDir(), "daemon.json")
 }
 
+func logPath() string {
+	return filepath.Join(runtimeDir(), "daemon.log")
+}
+
 func runtimeDir() string {
 	if value := os.Getenv("TTS_RUNTIME_DIR"); value != "" {
 		return value
@@ -254,35 +348,13 @@ func sanitize(value string) string {
 	return replacer.Replace(value)
 }
 
-func daemonExecutable() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Dir(self)
-	name := executableName("tts-daemon")
-	candidates := []string{
-		filepath.Join(dir, name),
-		filepath.Join(dir, "tts-daemon", name),
-	}
-	for _, candidate := range candidates {
-		if isExecutable(candidate) {
-			return candidate, nil
-		}
-	}
-	if path, err := exec.LookPath(name); err == nil {
-		return path, nil
-	}
-	return "", fmt.Errorf("could not find %s next to %s", name, self)
-}
-
 func execDaemon(args []string) {
-	path, err := daemonExecutable()
+	command, err := daemonCommand(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tts:", err)
 		os.Exit(1)
 	}
-	cmd := exec.Command(path, args...)
+	cmd := exec.Command(command.path, command.args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -295,22 +367,34 @@ func execDaemon(args []string) {
 	}
 }
 
-func executableName(name string) string {
-	if runtime.GOOS == "windows" {
-		return name + ".exe"
-	}
-	return name
+type commandSpec struct {
+	path string
+	args []string
 }
 
-func isExecutable(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
+func daemonCommand(args []string) (commandSpec, error) {
+	if override := os.Getenv("TTS_DAEMON_COMMAND"); override != "" {
+		parts := strings.Fields(override)
+		if len(parts) == 0 {
+			return commandSpec{}, errors.New("TTS_DAEMON_COMMAND is empty")
+		}
+		return commandSpec{path: parts[0], args: append(parts[1:], args...)}, nil
 	}
-	if runtime.GOOS == "windows" {
-		return true
+	uv, err := exec.LookPath("uv")
+	if err != nil {
+		return commandSpec{}, errors.New("uv is required to install/run the Python TTS daemon; install it from https://docs.astral.sh/uv/getting-started/installation/ or set TTS_DAEMON_COMMAND")
 	}
-	return info.Mode()&0111 != 0
+	pkg := os.Getenv("TTS_DAEMON_PACKAGE")
+	if pkg == "" {
+		pkg = daemonPackage
+	}
+	python := os.Getenv("TTS_DAEMON_PYTHON")
+	if python == "" {
+		python = daemonPython
+	}
+	uvArgs := []string{"tool", "run", "--python", python, "--from", pkg, "tts"}
+	uvArgs = append(uvArgs, args...)
+	return commandSpec{path: uv, args: uvArgs}, nil
 }
 
 func hasFlag(args []string, name string) bool {
@@ -337,6 +421,121 @@ func optionValue(args []string, name string) string {
 
 func configArg(args []string) string {
 	return optionValue(args, "--config")
+}
+
+func daemonOptionsFromSpeakArgs(args []string) daemonOptions {
+	options := defaultDaemonOptions()
+	options.configPath = configArg(args)
+	options.noConfig = hasFlag(args, "--no-config")
+	options.applyConfigDefaults()
+	if value := optionValue(args, "--daemon-idle-seconds"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			options.idleSeconds = parsed
+		}
+	}
+	if value := optionValue(args, "--daemon-start-timeout"); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed > 0 {
+			options.startTimeout = time.Duration(parsed * float64(time.Second))
+		}
+	}
+	return options
+}
+
+func daemonOptionsFromDaemonArgs(args []string) daemonOptions {
+	options := defaultDaemonOptions()
+	options.configPath = configArg(args)
+	options.applyConfigDefaults()
+	if value := optionValue(args, "--idle-seconds"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			options.idleSeconds = parsed
+		}
+	}
+	if value := optionValue(args, "--start-timeout"); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed > 0 {
+			options.startTimeout = time.Duration(parsed * float64(time.Second))
+		}
+	}
+	return options
+}
+
+func defaultDaemonOptions() daemonOptions {
+	return daemonOptions{
+		idleSeconds:  defaultIdleSeconds,
+		startTimeout: defaultStartTimeout,
+	}
+}
+
+func (options *daemonOptions) applyConfigDefaults() {
+	if options.noConfig {
+		return
+	}
+	path := options.configPath
+	if path == "" {
+		path = defaultConfigPath()
+	}
+	values := readSpeakConfig(path)
+	if value := values["daemon_idle_seconds"]; value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			options.idleSeconds = parsed
+		}
+	}
+	if value := values["daemon_start_timeout"]; value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed > 0 {
+			options.startTimeout = time.Duration(parsed * float64(time.Second))
+		}
+	}
+}
+
+func defaultConfigPath() string {
+	if value := os.Getenv("TTS_CONFIG"); value != "" {
+		return value
+	}
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "windows" {
+		if value := os.Getenv("APPDATA"); value != "" {
+			return filepath.Join(value, "tts", "config.ini")
+		}
+		return filepath.Join(home, "AppData", "Roaming", "tts", "config.ini")
+	}
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "Application Support", "tts", "config.ini")
+	}
+	if value := os.Getenv("XDG_CONFIG_HOME"); value != "" {
+		return filepath.Join(value, "tts", "config.ini")
+	}
+	return filepath.Join(home, ".config", "tts", "config.ini")
+}
+
+func readSpeakConfig(path string) map[string]string {
+	values := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return values
+	}
+	inSpeak := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inSpeak = strings.EqualFold(strings.TrimSpace(line[1:len(line)-1]), "speak")
+			continue
+		}
+		if !inSpeak {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			key, value, ok = strings.Cut(line, ":")
+		}
+		if !ok {
+			continue
+		}
+		name := strings.ReplaceAll(strings.TrimSpace(key), "-", "_")
+		values[name] = strings.TrimSpace(value)
+	}
+	return values
 }
 
 func mustGetwd() string {

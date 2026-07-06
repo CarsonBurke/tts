@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tts"
-version = "0.1.2"
+version = "0.1.3"
 description = "Small cross-platform speech CLI for agent status updates."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,7 +21,11 @@ vibevoice = [
 ]
 qwen3 = ["qwen-tts>=0.1.0; python_version >= '3.10'", "torch>=2.6; python_version >= '3.10'"]
 chatterbox = ["chatterbox-tts>=0.1.3; python_version >= '3.10'", "torch>=2.6; python_version >= '3.10'"]
-kokoro = ["kokoro>=0.7.16; python_version >= '3.10'", "torch>=2.6; python_version >= '3.10'"]
+kokoro = [
+    "kokoro>=0.7.16; python_version >= '3.10'",
+    "torch>=2.6; python_version >= '3.10'",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl ; python_version >= '3.10'",
+]
 neutts = ["neutts>=0.1.0; python_version >= '3.10'", "torch>=2.6; python_version >= '3.10'"]
 omnivoice = [
     "omnivoice @ git+https://github.com/k2-fsa/OmniVoice.git ; python_version >= '3.10'",
@@ -31,6 +35,7 @@ models = [
     "qwen-tts>=0.1.0; python_version >= '3.10'",
     "chatterbox-tts>=0.1.3; python_version >= '3.10'",
     "kokoro>=0.7.16; python_version >= '3.10'",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl ; python_version >= '3.10'",
     "neutts>=0.1.0; python_version >= '3.10'",
     "omnivoice @ git+https://github.com/k2-fsa/OmniVoice.git ; python_version >= '3.10'",
     "vibevoice[streamingtts] @ git+https://github.com/microsoft/VibeVoice.git ; python_version >= '3.10'",
