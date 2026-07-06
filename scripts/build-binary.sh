@@ -8,6 +8,9 @@ SPACY_MODEL_URL="${SPACY_MODEL_URL:-https://github.com/explosion/spacy-models/re
 
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install -U pip "setuptools<82" wheel
+if [[ "$(uname -s)" == "Linux" ]]; then
+  "$VENV_DIR/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.6"
+fi
 "$VENV_DIR/bin/python" -m pip install -e ".[kokoro]"
 "$VENV_DIR/bin/python" -m pip install "$SPACY_MODEL_URL"
 "$VENV_DIR/bin/python" -m pip install pyinstaller

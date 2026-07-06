@@ -2,6 +2,11 @@ name: Release binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to upload assets to.
+        required: false
+        default: v0.1.0
   release:
     types: [created]
 
@@ -34,6 +39,9 @@ jobs:
         shell: bash
         run: |
           python -m pip install -U pip "setuptools<82" wheel
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.6"
+          fi
           python -m pip install -e ".[kokoro]"
           python -m pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
           python -m pip install pyinstaller
@@ -79,9 +87,10 @@ jobs:
             release/${{ matrix.artifact }}.sha256
 
       - name: Upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
           files: |
             release/${{ matrix.artifact }}
             release/${{ matrix.artifact }}.sha256
