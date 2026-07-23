@@ -25,6 +25,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.command == "daemon":
         _run_daemon(args)
         return
+    if args.command in {"pause", "resume", "play-pause", "stop", "playback-status"}:
+        _run_playback_control(args)
+        return
     raise SpeechError(f"Unknown command: {args.command}")
 
 
@@ -95,6 +98,38 @@ def _run_daemon(args: argparse.Namespace) -> None:
         print(f"tts: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     raise SpeechError(f"Unknown daemon command: {args.daemon_command}")
+
+
+def _run_playback_control(args: argparse.Namespace) -> None:
+    from . import playback
+
+    try:
+        if args.command == "pause":
+            result = playback.pause()
+        elif args.command == "resume":
+            result = playback.resume()
+        elif args.command == "play-pause":
+            result = playback.play_pause()
+        elif args.command == "stop":
+            result = playback.stop()
+        elif args.command == "playback-status":
+            result = playback.status()
+        else:
+            raise SpeechError(f"Unknown playback command: {args.command}")
+    except playback.PlaybackError as exc:
+        print(f"tts: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    status = str(result.get("status") or "Stopped")
+    if args.command == "playback-status":
+        if result.get("playing"):
+            title = result.get("title") or "Speech"
+            pid = result.get("pid")
+            print(f"{status.lower()} pid={pid} title={title}")
+        else:
+            print("stopped")
+        return
+    print(status.lower())
 
 
 def _run_benchmark(args: argparse.Namespace) -> None:
@@ -360,6 +395,14 @@ def _parser() -> argparse.ArgumentParser:
     subcommands.add_parser("speak", parents=[_speak_parser(add_help=False)], add_help=True)
     subcommands.add_parser("benchmark", parents=[_benchmark_parser(add_help=False)], add_help=True)
     _add_daemon_parser(subcommands)
+    subcommands.add_parser("pause", help="Pause the current speech playback.")
+    subcommands.add_parser("resume", help="Resume paused speech playback.")
+    subcommands.add_parser("play-pause", help="Toggle pause/resume for current speech.")
+    subcommands.add_parser(
+        "stop",
+        help="Stop the current speech playback (does not stop the daemon).",
+    )
+    subcommands.add_parser("playback-status", help="Show whether speech is playing or paused.")
     return parser
 
 

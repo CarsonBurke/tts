@@ -19,6 +19,33 @@ and warms the model through a `uv`-managed Python environment; later
 begin much faster than a fresh neural TTS process. The daemon exits after 30
 idle minutes by default.
 
+While WAV audio is playing on Linux/macOS (Kokoro and other model backends),
+you can control it from the CLI or system media keys:
+
+```bash
+tts pause
+tts resume
+tts play-pause
+tts stop              # stop current speech only (not the daemon)
+tts playback-status
+```
+
+On Linux, TTS also registers as an MPRIS player named `TTS`, so media keys that
+call `playerctl play-pause` pause and resume speech. If other media players are
+open, prefer TTS explicitly:
+
+```bash
+playerctl -p tts play-pause
+# or, with a Hyprland bind:
+# bindd = , XF86AudioPlay, Toggles play/pause, exec, playerctl -p tts,%any play-pause
+```
+
+The MPRIS helper uses a system Python with `python-dbus` and `python-gobject`
+(normal desktop packages). Override the interpreter with `TTS_MPRIS_PYTHON`
+if needed. Without those packages, CLI pause/resume/stop still work; only media
+keys need MPRIS. Direct `system` backend speech (`spd-say`/`espeak`) does not
+go through this path.
+
 ## Backends
 
 - `vibevoice`: Uses Microsoft's official VibeVoice Realtime runtime for
@@ -95,7 +122,7 @@ Recommended release install:
 
 ```bash
 brew install uv
-uv tool install --python 3.12 "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@v0.1.7"
+uv tool install --python 3.12 "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@v0.1.8"
 tts speak "How are you doing?"
 ```
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -31,7 +32,38 @@ def play_wav(path: Path) -> None:
     command = playback_command(path)
     if command is None:
         raise SpeechError("No WAV playback command found for this platform.")
-    subprocess.run(command, check=True)
+    # Windows SoundPlayer path has no portable pause hooks; keep it simple.
+    if sys.platform == "win32":
+        subprocess.run(command, check=True)
+        return
+
+    # Avoid preexec_fn: the daemon is multi-threaded and preexec_fn is unsafe there.
+    process = subprocess.Popen(command)
+    title = _playback_title(path)
+    if process.pid:
+        try:
+            from . import playback as playback_ctl
+
+            playback_ctl.register(process.pid, title=title)
+        except Exception:
+            pass
+    try:
+        returncode = _wait_for_playback(process, title=title)
+    finally:
+        if process.pid:
+            try:
+                from . import playback as playback_ctl
+
+                playback_ctl.unregister(process.pid)
+            except Exception:
+                pass
+        _ensure_finished(process)
+
+    # Stop via media keys / CLI terminates the player; treat that as success.
+    if returncode and returncode < 0:
+        return
+    if returncode not in (0, None):
+        raise SpeechError(f"Playback failed with exit code {returncode}.")
 
 
 def play_samples(samples: Sequence[Sample], sample_rate: int) -> None:
@@ -67,6 +99,47 @@ def playback_command(path: Path) -> Optional[list[str]]:
             return [exe, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
         return [exe, str(path)]
     return None
+
+
+def _wait_for_playback(process: subprocess.Popen, title: str) -> int:
+    try:
+        from . import mpris
+
+        if mpris.available():
+            return mpris.run_with_player(process, title=title)
+    except Exception:
+        pass
+    returncode = process.wait()
+    return 0 if returncode is None else returncode
+
+
+def _ensure_finished(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if sys.platform != "win32" and hasattr(signal, "SIGCONT"):
+        try:
+            process.send_signal(signal.SIGCONT)
+        except ProcessLookupError:
+            return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        process.wait()
+
+
+def _playback_title(path: Path) -> str:
+    name = path.name
+    if name.startswith("tmp") or name.startswith("tts"):
+        return "Speech"
+    return name or "Speech"
 
 
 def _pcm16_bytes(samples: Iterable[Sample]) -> bytes:
