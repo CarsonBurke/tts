@@ -282,7 +282,16 @@ def main(argv: list[str] | None = None) -> int:
         loop.quit()
         return False
 
+    def reassert_active() -> bool:
+        # Re-emit while playing so playerctld keeps TTS selected over browsers.
+        if not controller.alive():
+            return False
+        if not controller.paused():
+            player._emit_status()
+        return True
+
     GLib.timeout_add(200, watch_target)
+    GLib.timeout_add(750, reassert_active)
     try:
         loop.run()
     finally:

@@ -30,14 +30,21 @@ tts stop              # stop current speech only (not the daemon)
 tts playback-status
 ```
 
-On Linux, TTS also registers as an MPRIS player named `TTS`, so media keys that
-call `playerctl play-pause` pause and resume speech. If other media players are
-open, prefer TTS explicitly:
+On Linux, TTS also registers as an MPRIS player named `TTS`. Media key binds
+should prefer TTS when it is active, otherwise other players steal the event
+(especially browsers via `playerctld`):
 
 ```bash
-playerctl -p tts play-pause
-# or, with a Hyprland bind:
-# bindd = , XF86AudioPlay, Toggles play/pause, exec, playerctl -p tts,%any play-pause
+playerctl -p tts,%any play-pause
+playerctl -p tts,%any pause
+playerctl -p tts,%any stop
+```
+
+Niri / Hyprland example:
+
+```bash
+# niri:  XF86AudioPlay { spawn-sh "playerctl -p tts,%any play-pause"; }
+# hypr:  bindd = , XF86AudioPlay, exec, playerctl -p tts,%any play-pause
 ```
 
 The MPRIS helper uses a system Python with `python-dbus` and `python-gobject`
@@ -122,7 +129,7 @@ Recommended release install:
 
 ```bash
 brew install uv
-uv tool install --python 3.12 "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@v0.1.8"
+uv tool install --python 3.12 "tts[kokoro] @ git+https://github.com/CarsonBurke/tts@v0.1.9"
 tts speak "How are you doing?"
 ```
 
