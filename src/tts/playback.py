@@ -19,24 +19,38 @@ def state_path() -> Path:
     return runtime_dir() / "playback.json"
 
 
+def begin(title: str = "Speech") -> None:
+    """Mark speech as starting (synthesis). Enables system pause before audio begins."""
+    _write_state(
+        {
+            "phase": "pending",
+            "pid": None,
+            "title": title or "Speech",
+            "cancelled": False,
+            "paused": False,
+            "started_at": time.time(),
+        }
+    )
+
+
 def register(pid: int, title: str = "Speech") -> None:
-    """Record the active audio player so CLI controls can find it."""
+    """Record the active audio player so CLI/MPRIS controls can find it."""
     if not pid:
         return
-    payload = {
-        "pid": int(pid),
-        "title": title,
-        "started_at": time.time(),
-    }
-    path = state_path()
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle)
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    tmp.replace(path)
+    current = read_state() or {}
+    if current.get("cancelled"):
+        # Caller should honor is_cancelled() and skip playback.
+        return
+    _write_state(
+        {
+            "phase": "playing",
+            "pid": int(pid),
+            "title": title or current.get("title") or "Speech",
+            "cancelled": False,
+            "paused": False,
+            "started_at": current.get("started_at") or time.time(),
+        }
+    )
 
 
 def unregister(pid: Optional[int] = None) -> None:
@@ -44,7 +58,10 @@ def unregister(pid: Optional[int] = None) -> None:
     path = state_path()
     if pid is not None:
         current = read_state()
-        if current is None or int(current.get("pid") or 0) != int(pid):
+        if current is None:
+            return
+        current_pid = current.get("pid")
+        if current_pid is not None and int(current_pid) != int(pid):
             return
     try:
         path.unlink()
@@ -59,31 +76,71 @@ def read_state() -> Optional[dict[str, Any]]:
             data = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
-    if not isinstance(data, dict) or "pid" not in data:
+    if not isinstance(data, dict):
         return None
     return data
+
+
+def is_cancelled() -> bool:
+    state = read_state()
+    return bool(state and state.get("cancelled"))
 
 
 def status() -> dict[str, Any]:
     state = read_state()
     if state is None:
         return {"playing": False, "status": "Stopped"}
-    pid = int(state["pid"])
+
+    title = state.get("title") or "Speech"
+    phase = state.get("phase") or "playing"
+    pid = state.get("pid")
+
+    if phase == "pending":
+        if state.get("cancelled") or state.get("paused"):
+            return {
+                "playing": True,
+                "status": "Paused",
+                "title": title,
+                "paused": True,
+                "phase": "pending",
+            }
+        return {
+            "playing": True,
+            "status": "Playing",
+            "title": title,
+            "paused": False,
+            "phase": "pending",
+        }
+
+    if pid is None:
+        unregister()
+        return {"playing": False, "status": "Stopped"}
+
+    pid = int(pid)
     if not pid_alive(pid):
         unregister(pid)
         return {"playing": False, "status": "Stopped"}
+
     paused = pid_paused(pid)
     return {
         "playing": True,
         "status": "Paused" if paused else "Playing",
         "pid": pid,
-        "title": state.get("title") or "Speech",
+        "title": title,
         "paused": paused,
+        "phase": "playing",
     }
 
 
 def pause() -> dict[str, Any]:
-    current = _require_active()
+    current = _require_active(allow_pending=True)
+    phase = current.get("phase") or "playing"
+    if phase == "pending":
+        current["paused"] = True
+        current["cancelled"] = True
+        _write_state(current)
+        return status()
+
     pid = int(current["pid"])
     if pid_paused(pid):
         return status()
@@ -92,7 +149,12 @@ def pause() -> dict[str, Any]:
 
 
 def resume() -> dict[str, Any]:
-    current = _require_active()
+    current = _require_active(allow_pending=True)
+    phase = current.get("phase") or "playing"
+    if phase == "pending":
+        # Pending cancel is terminal for that utterance; nothing to resume.
+        return status()
+
     pid = int(current["pid"])
     if not pid_paused(pid):
         return status()
@@ -101,18 +163,27 @@ def resume() -> dict[str, Any]:
 
 
 def play_pause() -> dict[str, Any]:
-    current = _require_active()
-    pid = int(current["pid"])
-    if pid_paused(pid):
-        _signal_pid(pid, signal.SIGCONT)
-    else:
-        _signal_pid(pid, signal.SIGSTOP)
-    return status()
+    current = status()
+    if not current.get("playing"):
+        raise PlaybackError("nothing is playing")
+    if current.get("status") == "Paused":
+        return resume()
+    return pause()
 
 
 def stop() -> dict[str, Any]:
-    current = _require_active()
-    pid = int(current["pid"])
+    current = _require_active(allow_pending=True)
+    phase = current.get("phase") or "playing"
+    pid = current.get("pid")
+    if phase == "pending" or pid is None:
+        current["cancelled"] = True
+        current["paused"] = True
+        _write_state(current)
+        # Clear after marking cancelled so synthesizers observe the flag briefly.
+        unregister()
+        return {"playing": False, "status": "Stopped"}
+
+    pid = int(pid)
     if pid_paused(pid):
         try:
             _signal_pid(pid, signal.SIGCONT)
@@ -145,17 +216,40 @@ def pid_paused(pid: int) -> bool:
         return _linux_state(pid) == "T"
     if sys.platform == "darwin":
         return _darwin_state(pid) in {"T", "U"}
-    # Best effort elsewhere: no reliable portable check.
     return False
 
 
-def _require_active() -> dict[str, Any]:
+def _write_state(payload: dict[str, Any]) -> None:
+    path = state_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+
+
+def _require_active(allow_pending: bool = False) -> dict[str, Any]:
     if sys.platform == "win32":
         raise PlaybackError("playback control is not supported on Windows")
     state = read_state()
     if state is None:
         raise PlaybackError("nothing is playing")
-    pid = int(state["pid"])
+
+    phase = state.get("phase") or "playing"
+    if phase == "pending":
+        if allow_pending:
+            return state
+        raise PlaybackError("nothing is playing")
+
+    pid = state.get("pid")
+    if pid is None:
+        unregister()
+        raise PlaybackError("nothing is playing")
+    pid = int(pid)
     if not pid_alive(pid):
         unregister(pid)
         raise PlaybackError("nothing is playing")
@@ -174,7 +268,6 @@ def _linux_state(pid: int) -> Optional[str]:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
         return None
-    # comm may contain spaces/parens; state is the field after the closing ')'.
     close = raw.rfind(")")
     if close == -1 or close + 2 >= len(raw):
         return None

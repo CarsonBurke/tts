@@ -5,16 +5,20 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 
+import threading
+
 # Active player PIDs so process/daemon exit can unstick SIGSTOP'd audio.
 _ACTIVE_PLAYERS: set[int] = set()
 _ACTIVE_LOCK = threading.Lock()
 _CLEANUP_REGISTERED = False
+
+_HELPER_PYTHON_CACHE: Optional[str] = None
+_HELPER_PYTHON_RESOLVED = False
 
 
 class PlaybackController:
@@ -80,46 +84,71 @@ def available() -> bool:
     return _helper_python() is not None
 
 
+def ensure_session_helper(idle_seconds: int = 0) -> bool:
+    """Ensure the long-lived MPRIS session player is running (singleton)."""
+    if not available():
+        return False
+    if _session_helper_alive():
+        return True
+    return _start_session_helper(idle_seconds=idle_seconds) is not None
+
+
+def stop_session_helper() -> None:
+    pid = _read_session_pid()
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        _session_pid_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
 def run_with_player(process, title: str = "Speech") -> int:
-    """Wait for *process*, exposing MPRIS controls when possible. Returns exit code."""
+    """Wait for *process* while the session MPRIS helper exposes controls."""
     _register_cleanup()
+    ensure_session_helper()
     if process.pid:
         _track_player(process.pid)
-    helper = _start_helper(process.pid, title) if process.pid else None
     try:
-        return _wait_for_process(process, helper)
+        return _wait_for_process(process)
     finally:
-        if helper is not None:
-            _stop_helper(helper)
         _unstick_and_reap(process)
         if process.pid:
             _untrack_player(process.pid)
 
 
-def _wait_for_process(process: subprocess.Popen, helper: Optional[subprocess.Popen]) -> int:
-    """Wait for the player; if the MPRIS helper dies while paused, resume playback."""
-    helper_failed = False
+def _wait_for_process(process: subprocess.Popen) -> int:
     while True:
         try:
             returncode = process.wait(timeout=0.25)
             return 0 if returncode is None else returncode
         except subprocess.TimeoutExpired:
             pass
-        if helper is not None and not helper_failed and helper.poll() is not None:
-            # Helper crashed or exited while the player may still be SIGSTOP'd.
-            helper_failed = True
-            _cont_process(process)
-    # Unreachable; loop either returns or continues until process exits.
 
 
-def _start_helper(pid: int, title: str) -> Optional[subprocess.Popen]:
+def _start_session_helper(idle_seconds: int = 0) -> Optional[subprocess.Popen]:
     python = _helper_python()
     helper_path = Path(__file__).with_name("mpris_helper.py")
     if python is None or not helper_path.is_file():
         return None
+    from .playback import state_path
+
+    command = [
+        python,
+        str(helper_path),
+        "--session",
+        "--state-path",
+        str(state_path()),
+        "--idle-seconds",
+        str(int(idle_seconds)),
+    ]
     try:
-        return subprocess.Popen(
-            [python, str(helper_path), "--pid", str(pid), "--title", title],
+        helper = subprocess.Popen(
+            command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -127,23 +156,79 @@ def _start_helper(pid: int, title: str) -> Optional[subprocess.Popen]:
         )
     except OSError:
         return None
+    _write_session_pid(helper.pid)
+    # Brief wait so the bus name is claimed before the first utterance.
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if helper.poll() is not None:
+            return None
+        if _bus_name_owned():
+            return helper
+        time.sleep(0.05)
+    return helper
 
 
-def _stop_helper(helper: subprocess.Popen) -> None:
-    if helper.poll() is not None:
-        return
+def _session_helper_alive() -> bool:
+    pid = _read_session_pid()
+    if pid is None:
+        return _bus_name_owned()
     try:
-        helper.terminate()
-    except ProcessLookupError:
-        return
-    try:
-        helper.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
+        os.kill(pid, 0)
+    except OSError:
         try:
-            helper.kill()
-        except ProcessLookupError:
-            return
-        helper.wait()
+            _session_pid_path().unlink()
+        except FileNotFoundError:
+            pass
+        return _bus_name_owned()
+    return True
+
+
+def _bus_name_owned() -> bool:
+    try:
+        completed = subprocess.run(
+            [
+                "busctl",
+                "--user",
+                "status",
+                "org.mpris.MediaPlayer2.tts",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _session_pid_path() -> Path:
+    from .daemon import runtime_dir
+
+    return runtime_dir() / "mpris.pid"
+
+
+def _read_session_pid() -> Optional[int]:
+    try:
+        raw = _session_pid_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def _write_session_pid(pid: int) -> None:
+    path = _session_pid_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(str(pid), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
 
 
 def _unstick_and_reap(process: subprocess.Popen) -> None:
@@ -219,10 +304,6 @@ def _kill_pid(pid: int) -> None:
             return
 
 
-_HELPER_PYTHON_CACHE: Optional[str] = None
-_HELPER_PYTHON_RESOLVED = False
-
-
 def _helper_python() -> Optional[str]:
     global _HELPER_PYTHON_CACHE, _HELPER_PYTHON_RESOLVED
     if _HELPER_PYTHON_RESOLVED and "TTS_MPRIS_PYTHON" not in os.environ:
@@ -232,7 +313,6 @@ def _helper_python() -> Optional[str]:
     candidates: list[str] = []
     if override:
         candidates.append(override)
-    # Prefer a system interpreter; the TTS venv often lacks dbus/gi.
     candidates.extend(
         [
             "/usr/bin/python3",
@@ -277,5 +357,3 @@ def _python_has_mpris_deps(python: str) -> bool:
 
 def _supports_signal_pause() -> bool:
     return sys.platform != "win32" and hasattr(signal, "SIGSTOP") and hasattr(signal, "SIGCONT")
-
-

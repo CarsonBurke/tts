@@ -309,9 +309,10 @@ def test_playback_controller_stop_while_playing():
     assert controller.status() == "Stopped"
 
 
-def test_mpris_helper_controller_pause_resume_stop(tmp_path, monkeypatch):
-    """Exercise the standalone helper Controller used in production."""
+def test_mpris_helper_state_controller_pause_resume_stop(tmp_path, monkeypatch):
+    """Exercise the session StateController used by the MPRIS helper."""
     import importlib.util
+    import json
     import signal
     from pathlib import Path
 
@@ -321,6 +322,11 @@ def test_mpris_helper_controller_pause_resume_stop(tmp_path, monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    state_file = tmp_path / "playback.json"
+    state_file.write_text(
+        json.dumps({"phase": "playing", "pid": 99, "title": "Speech", "cancelled": False}),
+        encoding="utf-8",
+    )
     sent: list[tuple[int, int]] = []
     stopped = {"value": False}
 
@@ -339,13 +345,13 @@ def test_mpris_helper_controller_pause_resume_stop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module.os, "kill", fake_kill)
     monkeypatch.setattr(module, "_process_state", lambda pid: "T" if stopped["value"] else "R")
-    controller = module.Controller(pid=99, title="Speech")
+    controller = module.StateController(state_file)
     assert controller.status() == "Playing"
     controller.pause()
-    assert controller.paused() is True
+    assert controller.status() == "Paused"
     assert sent == [(99, signal.SIGSTOP)]
     controller.play()
-    assert controller.paused() is False
+    assert controller.status() == "Playing"
     assert sent[-1] == (99, signal.SIGCONT)
     controller.pause()
     controller.stop()
@@ -409,8 +415,8 @@ def test_parser_accepts_playback_commands():
         assert args.command == command
 
 
-def test_run_with_player_resumes_if_helper_dies(monkeypatch):
-    """If the MPRIS helper exits while audio is SIGSTOP'd, playback must resume."""
+def test_run_with_player_waits_for_natural_end(monkeypatch):
+    """Session MPRIS mode waits on the player process without a per-play helper."""
     import signal
     import subprocess
     import time
@@ -419,7 +425,6 @@ def test_run_with_player_resumes_if_helper_dies(monkeypatch):
         def __init__(self) -> None:
             self.pid = 12345
             self.signals: list[int] = []
-            self._paused = False
             self._alive = True
             self._started = time.monotonic()
 
@@ -429,13 +434,7 @@ def test_run_with_player_resumes_if_helper_dies(monkeypatch):
         def wait(self, timeout=None):
             deadline = None if timeout is None else time.monotonic() + timeout
             while self._alive:
-                if self._paused:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        raise subprocess.TimeoutExpired(cmd="player", timeout=timeout)
-                    time.sleep(0.01)
-                    continue
-                # Natural end shortly after resume/start.
-                if time.monotonic() - self._started > 0.05 and not self._paused:
+                if time.monotonic() - self._started > 0.05:
                     self._alive = False
                     return 0
                 if deadline is not None and time.monotonic() >= deadline:
@@ -445,13 +444,9 @@ def test_run_with_player_resumes_if_helper_dies(monkeypatch):
 
         def send_signal(self, sig: int) -> None:
             self.signals.append(sig)
-            if sig == signal.SIGSTOP:
-                self._paused = True
-            elif sig == signal.SIGCONT:
-                self._paused = False
-                self._started = time.monotonic()
-            elif sig in (signal.SIGTERM, signal.SIGKILL):
-                self._alive = False
+            if sig in (signal.SIGTERM, signal.SIGKILL, signal.SIGCONT):
+                if sig in (signal.SIGTERM, signal.SIGKILL):
+                    self._alive = False
 
         def terminate(self) -> None:
             self.send_signal(signal.SIGTERM)
@@ -459,40 +454,20 @@ def test_run_with_player_resumes_if_helper_dies(monkeypatch):
         def kill(self) -> None:
             self.send_signal(signal.SIGKILL)
 
-    class Helper:
-        def __init__(self) -> None:
-            self._alive = True
-
-        def poll(self):
-            return None if self._alive else 0
-
-        def terminate(self) -> None:
-            self._alive = False
-
-        def kill(self) -> None:
-            self._alive = False
-
-        def wait(self, timeout=None):
-            self._alive = False
-            return 0
-
-    player = Player()
-    helper = Helper()
-
-    monkeypatch.setattr("tts.mpris._start_helper", lambda pid, title: helper)
-    monkeypatch.setattr("tts.mpris._helper_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr("tts.mpris.ensure_session_helper", lambda idle_seconds=0: True)
     monkeypatch.setattr("tts.mpris.available", lambda: True)
 
-    def die_soon():
-        time.sleep(0.05)
-        player.send_signal(signal.SIGSTOP)
-        time.sleep(0.05)
-        helper._alive = False
-
-    import threading
-
-    threading.Thread(target=die_soon, daemon=True).start()
+    player = Player()
     code = run_with_player(player, title="Speech")
     assert code == 0
-    assert signal.SIGCONT in player.signals
     assert player.poll() is not None
+
+
+def test_playback_begin_allows_pause_before_audio(tmp_path, monkeypatch):
+    monkeypatch.setenv("TTS_RUNTIME_DIR", str(tmp_path))
+    playback_mod.begin(title="Hello")
+    assert playback_mod.status()["status"] == "Playing"
+    assert playback_mod.status()["phase"] == "pending"
+    paused = playback_mod.pause()
+    assert paused["status"] == "Paused"
+    assert playback_mod.is_cancelled() is True

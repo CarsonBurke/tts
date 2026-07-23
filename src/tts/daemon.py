@@ -241,6 +241,14 @@ def serve(config_path: Optional[str], idle_seconds: int) -> None:
         server.timeout = 1
         server_state["port"] = int(server.server_address[1])
         try:
+            try:
+                from . import mpris
+
+                # Stay on the session bus like a normal media app while the
+                # daemon is warm, so system play/pause targets TTS naturally.
+                mpris.ensure_session_helper(idle_seconds=0)
+            except Exception:
+                pass
             _warm_kokoro(config, resolve_option)
             server_state["ready"] = True
             _write_state(server_state)
@@ -249,13 +257,42 @@ def serve(config_path: Optional[str], idle_seconds: int) -> None:
                 if time.monotonic() - last_activity >= idle_seconds:
                     break
         finally:
+            try:
+                from . import mpris
+
+                mpris.stop_session_helper()
+            except Exception:
+                pass
             _unlink_state()
 
 
 def _speak_kokoro(request: SpeakRequest) -> SpeechResult:
     from .backends import kokoro
+    from . import playback
 
-    return kokoro.speak(request)
+    title = (request.text or "Speech").strip().splitlines()[0][:80] or "Speech"
+    if request.play:
+        try:
+            from . import mpris
+
+            mpris.ensure_session_helper()
+            playback.begin(title=title)
+        except Exception:
+            pass
+    try:
+        if request.play and playback.is_cancelled():
+            playback.unregister()
+            from .backends import SpeechResult as SR
+
+            return SR(backend="kokoro", sample_rate=None, output_path=None)
+        return kokoro.speak(request)
+    finally:
+        if request.play:
+            # If playback finished or was cancelled without unregister, clear.
+            state = playback.read_state()
+            if state and state.get("phase") == "pending":
+                playback.unregister()
+
 
 
 def _warm_kokoro(config: dict[str, object], resolve_option) -> None:

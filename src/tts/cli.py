@@ -51,6 +51,18 @@ def _run_speak(args: argparse.Namespace) -> None:
     text = _resolve_text(args)
     request = _request_from_args(args, text, _path_arg(args.output), not args.no_play)
 
+    # For local (non-daemon) speech, advertise MPRIS as soon as synthesis starts.
+    if request.play and not _should_use_daemon(args):
+        try:
+            from . import mpris
+            from . import playback
+
+            mpris.ensure_session_helper()
+            title = text.strip().splitlines()[0][:80] if text.strip() else "Speech"
+            playback.begin(title=title or "Speech")
+        except Exception:
+            pass
+
     try:
         if _should_use_daemon(args):
             result = _speak_with_daemon(args, request)

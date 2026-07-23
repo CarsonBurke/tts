@@ -3,14 +3,21 @@
 
 Intended to run under a system Python that has dbus-python and PyGObject
 (python-dbus / python-gobject), not necessarily the TTS virtualenv.
+
+Session mode (--session) keeps org.mpris.MediaPlayer2.tts on the bus for the
+lifetime of the TTS daemon / speech session, watching playback.json the same
+way Spotify stays registered while the app is open.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
+import time
+from pathlib import Path
 
 
 MPRIS_BUS_NAME = "org.mpris.MediaPlayer2.tts"
@@ -20,68 +27,144 @@ PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 
 
-class Controller:
-    def __init__(self, pid: int, title: str) -> None:
-        self.pid = pid
-        self.title = title
+class StateController:
+    """Control whatever utterance is described by playback.json."""
 
-    def alive(self) -> bool:
+    def __init__(self, state_path: Path) -> None:
+        self.state_path = state_path
+
+    def read(self) -> dict | None:
         try:
-            os.kill(self.pid, 0)
-            return True
-        except OSError:
-            return False
+            with self.state_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        return data if isinstance(data, dict) else None
 
-    def paused(self) -> bool:
-        """Derive pause from process state so CLI SIGSTOP stays in sync."""
-        if not self.alive():
-            return False
-        state = _process_state(self.pid)
-        return state == "T"
+    def write(self, data: dict) -> None:
+        tmp = self.state_path.with_suffix(".tmp")
+        self.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        tmp.replace(self.state_path)
+
+    def clear(self) -> None:
+        try:
+            self.state_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def title(self) -> str:
+        state = self.read() or {}
+        return str(state.get("title") or "Speech")
 
     def status(self) -> str:
-        if not self.alive():
+        state = self.read()
+        if not state:
             return "Stopped"
-        return "Paused" if self.paused() else "Playing"
+        phase = state.get("phase") or "playing"
+        if phase == "pending":
+            if state.get("cancelled") or state.get("paused"):
+                return "Paused"
+            return "Playing"
+        pid = state.get("pid")
+        if pid is None:
+            return "Stopped"
+        pid = int(pid)
+        if not _pid_alive(pid):
+            return "Stopped"
+        return "Paused" if _pid_paused(pid) else "Playing"
 
     def pause(self) -> None:
-        if not self.alive() or self.paused():
+        state = self.read()
+        if not state:
+            return
+        phase = state.get("phase") or "playing"
+        if phase == "pending":
+            state["paused"] = True
+            state["cancelled"] = True
+            self.write(state)
+            return
+        pid = state.get("pid")
+        if pid is None:
+            return
+        pid = int(pid)
+        if not _pid_alive(pid) or _pid_paused(pid):
             return
         try:
-            os.kill(self.pid, signal.SIGSTOP)
+            os.kill(pid, signal.SIGSTOP)
         except OSError:
             return
 
     def play(self) -> None:
-        if not self.alive() or not self.paused():
+        state = self.read()
+        if not state:
+            return
+        phase = state.get("phase") or "playing"
+        if phase == "pending":
+            return
+        pid = state.get("pid")
+        if pid is None:
+            return
+        pid = int(pid)
+        if not _pid_alive(pid) or not _pid_paused(pid):
             return
         try:
-            os.kill(self.pid, signal.SIGCONT)
+            os.kill(pid, signal.SIGCONT)
         except OSError:
             return
 
     def play_pause(self) -> None:
-        if self.paused():
+        if self.status() == "Paused":
             self.play()
-        else:
+        elif self.status() == "Playing":
             self.pause()
 
     def stop(self) -> None:
-        if not self.alive():
+        state = self.read()
+        if not state:
             return
-        if self.paused():
+        phase = state.get("phase") or "playing"
+        pid = state.get("pid")
+        if phase == "pending" or pid is None:
+            state["cancelled"] = True
+            state["paused"] = True
+            self.write(state)
+            self.clear()
+            return
+        pid = int(pid)
+        if _pid_paused(pid):
             try:
-                os.kill(self.pid, signal.SIGCONT)
+                os.kill(pid, signal.SIGCONT)
             except OSError:
                 pass
         try:
-            os.kill(self.pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGTERM)
         except OSError:
-            # Last resort: SIGKILL works even on a stopped task.
             try:
-                os.kill(self.pid, signal.SIGKILL)
+                os.kill(pid, signal.SIGKILL)
             except OSError:
-                return
+                pass
+        self.clear()
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _pid_paused(pid: int) -> bool:
+    if not _pid_alive(pid):
+        return False
+    state = _process_state(pid)
+    return state == "T"
 
 
 def _process_state(pid: int) -> str | None:
@@ -100,8 +183,17 @@ def _process_state(pid: int) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MPRIS helper for tts playback.")
-    parser.add_argument("--pid", type=int, required=True, help="PID of the audio player process.")
-    parser.add_argument("--title", default="Speech", help="Track title shown to media controllers.")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--session", action="store_true", help="Long-lived player watching a state file.")
+    mode.add_argument("--pid", type=int, help="Legacy one-shot mode: control a single player PID.")
+    parser.add_argument("--state-path", help="playback.json path (required for --session).")
+    parser.add_argument("--title", default="Speech", help="Track title for legacy --pid mode.")
+    parser.add_argument(
+        "--idle-seconds",
+        type=int,
+        default=0,
+        help="In session mode, exit after this many idle seconds (0 = run until killed).",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -113,26 +205,47 @@ def main(argv: list[str] | None = None) -> int:
         print(f"tts-mpris: missing dbus bindings: {exc}", file=sys.stderr)
         return 2
 
-    controller = Controller(args.pid, args.title)
-    if not controller.alive():
-        return 0
+    if args.session:
+        if not args.state_path:
+            print("tts-mpris: --state-path is required with --session", file=sys.stderr)
+            return 2
+        controller = StateController(Path(args.state_path))
+        legacy_pid = None
+    else:
+        controller = StateController(Path(os.devnull))  # unused
+        legacy_pid = args.pid
+        # Legacy one-shot: synthesize a tiny state file in memory via wrapper.
+        controller = _LegacyPidController(args.pid, args.title)
+        if controller.status() == "Stopped":
+            return 0
 
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
 
-    # Prefer the well-known name so `playerctl -p tts` works; keep instance as fallback.
     bus_name = None
-    for name in (MPRIS_BUS_NAME, f"{MPRIS_BUS_NAME}.instance{args.pid}"):
-        try:
-            bus_name = dbus.service.BusName(name, bus, do_not_queue=True)
-            break
-        except Exception:
-            bus_name = None
+    # Always prefer the stable well-known name so playerctl/playerctld treat us
+    # like any other media app.
+    try:
+        bus_name = dbus.service.BusName(MPRIS_BUS_NAME, bus, do_not_queue=True)
+    except Exception:
+        if legacy_pid is not None:
+            try:
+                bus_name = dbus.service.BusName(
+                    f"{MPRIS_BUS_NAME}.instance{legacy_pid}", bus, do_not_queue=True
+                )
+            except Exception as exc:
+                print(f"tts-mpris: could not claim bus name: {exc}", file=sys.stderr)
+                return 3
+        else:
+            # Another session helper already owns the name; exit quietly.
+            return 0
     if bus_name is None:
         print("tts-mpris: could not claim bus name", file=sys.stderr)
         return 3
 
     loop = GLib.MainLoop()
+    last_status = {"value": "Stopped"}
+    last_activity = {"value": time.monotonic()}
 
     class MprisObject(dbus.service.Object):
         def __init__(self) -> None:
@@ -146,7 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         def Quit(self) -> None:
             controller.stop()
             self._emit_status()
-            GLib.idle_add(loop.quit)
+            if not args.session:
+                GLib.idle_add(loop.quit)
 
         @dbus.service.method(PLAYER_IFACE)
         def Next(self) -> None:
@@ -170,7 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         def Stop(self) -> None:
             controller.stop()
             self._emit_status()
-            GLib.idle_add(loop.quit)
+            if not args.session:
+                GLib.idle_add(loop.quit)
 
         @dbus.service.method(PLAYER_IFACE)
         def Play(self) -> None:
@@ -201,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
 
         @dbus.service.method(PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
         def GetAll(self, interface: str):
+            status = controller.status()
+            can_control = status != "Stopped"
             if interface == ROOT_IFACE:
                 return dbus.Dictionary(
                     {
@@ -219,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             if interface == PLAYER_IFACE:
                 return dbus.Dictionary(
                     {
-                        "PlaybackStatus": dbus.String(controller.status()),
+                        "PlaybackStatus": dbus.String(status),
                         "LoopStatus": dbus.String("None"),
                         "Rate": dbus.Double(1.0),
                         "Shuffle": dbus.Boolean(False),
@@ -228,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "mpris:trackid": dbus.ObjectPath(
                                     "/org/mpris/MediaPlayer2/tts/track/1"
                                 ),
-                                "xesam:title": dbus.String(controller.title),
+                                "xesam:title": dbus.String(controller.title()),
                                 "xesam:artist": dbus.Array(
                                     [dbus.String("TTS")], signature="s"
                                 ),
@@ -242,8 +359,8 @@ def main(argv: list[str] | None = None) -> int:
                         "MaximumRate": dbus.Double(1.0),
                         "CanGoNext": dbus.Boolean(False),
                         "CanGoPrevious": dbus.Boolean(False),
-                        "CanPlay": dbus.Boolean(True),
-                        "CanPause": dbus.Boolean(True),
+                        "CanPlay": dbus.Boolean(can_control),
+                        "CanPause": dbus.Boolean(can_control),
                         "CanSeek": dbus.Boolean(False),
                         "CanControl": dbus.Boolean(True),
                     },
@@ -263,41 +380,119 @@ def main(argv: list[str] | None = None) -> int:
             return None
 
         def _emit_status(self) -> None:
-            self.PropertiesChanged(
-                PLAYER_IFACE,
-                dbus.Dictionary(
-                    {"PlaybackStatus": dbus.String(controller.status())},
-                    signature="sv",
-                ),
-                dbus.Array([], signature="s"),
+            status = controller.status()
+            last_status["value"] = status
+            if status != "Stopped":
+                last_activity["value"] = time.monotonic()
+            changed = dbus.Dictionary(
+                {
+                    "PlaybackStatus": dbus.String(status),
+                    "CanPlay": dbus.Boolean(status != "Stopped"),
+                    "CanPause": dbus.Boolean(status != "Stopped"),
+                    "Metadata": dbus.Dictionary(
+                        {
+                            "mpris:trackid": dbus.ObjectPath(
+                                "/org/mpris/MediaPlayer2/tts/track/1"
+                            ),
+                            "xesam:title": dbus.String(controller.title()),
+                            "xesam:artist": dbus.Array(
+                                [dbus.String("TTS")], signature="s"
+                            ),
+                            "xesam:album": dbus.String("Agent speech"),
+                        },
+                        signature="sv",
+                    ),
+                },
+                signature="sv",
             )
+            self.PropertiesChanged(PLAYER_IFACE, changed, dbus.Array([], signature="s"))
 
     player = MprisObject()
-    # Advertise Playing immediately so playerctld/playerctl prefer this player.
     player._emit_status()
 
-    def watch_target() -> bool:
-        if controller.alive():
-            return True
-        loop.quit()
-        return False
-
-    def reassert_active() -> bool:
-        # Re-emit while playing so playerctld keeps TTS selected over browsers.
-        if not controller.alive():
-            return False
-        if not controller.paused():
+    def poll_state() -> bool:
+        status = controller.status()
+        if status != last_status["value"]:
+            # Transition into Playing is what makes playerctld select us.
             player._emit_status()
+        elif status == "Playing":
+            # Keep TTS selected over browsers that chatter on MPRIS.
+            player._emit_status()
+            last_activity["value"] = time.monotonic()
+        elif status == "Stopped" and not args.session:
+            loop.quit()
+            return False
+        elif (
+            args.session
+            and args.idle_seconds > 0
+            and status == "Stopped"
+            and time.monotonic() - last_activity["value"] >= args.idle_seconds
+        ):
+            loop.quit()
+            return False
         return True
 
-    GLib.timeout_add(200, watch_target)
-    GLib.timeout_add(750, reassert_active)
+    GLib.timeout_add(250, poll_state)
     try:
         loop.run()
     finally:
         del player
         del bus_name
     return 0
+
+
+class _LegacyPidController:
+    """One-shot controller for a single paplay PID (back-compat)."""
+
+    def __init__(self, pid: int, title: str) -> None:
+        self.pid = pid
+        self._title = title
+
+    def title(self) -> str:
+        return self._title
+
+    def status(self) -> str:
+        if not _pid_alive(self.pid):
+            return "Stopped"
+        return "Paused" if _pid_paused(self.pid) else "Playing"
+
+    def pause(self) -> None:
+        if self.status() != "Playing":
+            return
+        try:
+            os.kill(self.pid, signal.SIGSTOP)
+        except OSError:
+            return
+
+    def play(self) -> None:
+        if self.status() != "Paused":
+            return
+        try:
+            os.kill(self.pid, signal.SIGCONT)
+        except OSError:
+            return
+
+    def play_pause(self) -> None:
+        if self.status() == "Paused":
+            self.play()
+        elif self.status() == "Playing":
+            self.pause()
+
+    def stop(self) -> None:
+        if self.status() == "Stopped":
+            return
+        if _pid_paused(self.pid):
+            try:
+                os.kill(self.pid, signal.SIGCONT)
+            except OSError:
+                pass
+        try:
+            os.kill(self.pid, signal.SIGTERM)
+        except OSError:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except OSError:
+                return
 
 
 if __name__ == "__main__":

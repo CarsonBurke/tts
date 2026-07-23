@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag used by the uv-managed package.
         required: false
-        default: v0.1.9
+        default: v0.1.10
   release:
     types: [created]
 

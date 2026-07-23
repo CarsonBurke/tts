@@ -37,14 +37,29 @@ def play_wav(path: Path) -> None:
         subprocess.run(command, check=True)
         return
 
+    try:
+        from . import playback as playback_ctl
+
+        if playback_ctl.is_cancelled():
+            playback_ctl.unregister()
+            return
+    except Exception:
+        playback_ctl = None  # type: ignore[assignment]
+
     # Avoid preexec_fn: the daemon is multi-threaded and preexec_fn is unsafe there.
     process = subprocess.Popen(command)
     title = _playback_title(path)
     if process.pid:
         try:
             from . import playback as playback_ctl
+            from . import mpris
 
+            mpris.ensure_session_helper()
             playback_ctl.register(process.pid, title=title)
+            if playback_ctl.is_cancelled():
+                _ensure_finished(process)
+                playback_ctl.unregister(process.pid)
+                return
         except Exception:
             pass
     try:
